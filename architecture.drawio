@@ -1,0 +1,194 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/29.6.6 Chrome/144.0.7559.236 Electron/40.8.4 Safari/537.36" version="29.6.6">
+  <diagram name="Page-1" id="ttk5624QEzQB_q07Q3ho">
+    <mxGraphModel dx="1665" dy="841" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-1" parent="1" style="whiteSpace=wrap;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);" value="Phase 4: Neo4j Knowledge Graph" vertex="1">
+          <mxGeometry height="392" width="339" x="108" y="2571" as="geometry" />
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-2" parent="1" style="whiteSpace=wrap;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);" value="Phase 3: Analytical Validator" vertex="1">
+          <mxGeometry height="1202" width="595" x="20" y="1319" as="geometry" />
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-3" parent="1" style="whiteSpace=wrap;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);" value="Phase 2: Spatial Tracker" vertex="1">
+          <mxGeometry height="631" width="308" x="77" y="638" as="geometry" />
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-4" parent="1" style="whiteSpace=wrap;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);" value="Phase 1: Spatial OCR Pipeline" vertex="1">
+          <mxGeometry height="464" width="300" x="81" y="124" as="geometry" />
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-5" parent="1" style="whiteSpace=wrap;strokeWidth=2;fillColor=#f9f9f9;strokeColor=#333;fontColor=light-dark(#333333,#cccccc);" value="Faded Medical Record 1985" vertex="1">
+          <mxGeometry height="54" width="255" x="103" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-6" parent="1" style="whiteSpace=wrap;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);" value="Phase 1: Extractor" vertex="1">
+          <mxGeometry height="54" width="191" x="135" y="149" as="geometry" />
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-7" parent="1" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);" value="YOLO: Bounding Box Detection" vertex="1">
+          <mxGeometry height="78" width="230" x="116" y="253" as="geometry" />
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-8" parent="1" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);" value="TrOCR: Text Recognition on Crops" vertex="1">
+          <mxGeometry height="78" width="230" x="116" y="381" as="geometry" />
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-9" parent="1" style="whiteSpace=wrap;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);" value="List of SpatialTokens" vertex="1">
+          <mxGeometry height="54" width="207" x="127" y="509" as="geometry" />
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-10" parent="1" style="whiteSpace=wrap;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);" value="Phase 2: Structural Audit" vertex="1">
+          <mxGeometry height="54" width="238" x="112" y="663" as="geometry" />
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-11" parent="1" style="rhombus;strokeWidth=2;whiteSpace=wrap;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);" value="Reading Order Validator" vertex="1">
+          <mxGeometry height="225" width="225" x="118" y="767" as="geometry" />
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-12" parent="1" style="shape=cylinder3;boundedLbl=1;backgroundOutline=1;size=10;strokeWidth=2;whiteSpace=wrap;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);" value="Spatial Index" vertex="1">
+          <mxGeometry height="74" width="108" x="177" y="1066" as="geometry" />
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-13" parent="1" style="whiteSpace=wrap;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);" value="Hallucination Detector" vertex="1">
+          <mxGeometry height="54" width="222" x="119" y="1190" as="geometry" />
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-14" parent="1" style="whiteSpace=wrap;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);" value="Phase 3: Validation Engine" vertex="1">
+          <mxGeometry height="54" width="248" x="107" y="1344" as="geometry" />
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-15" parent="1" style="rhombus;strokeWidth=2;whiteSpace=wrap;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);" value="Layer 1: Confidence Gate" vertex="1">
+          <mxGeometry height="237" width="237" x="112" y="1448" as="geometry" />
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-16" parent="1" style="rhombus;strokeWidth=2;whiteSpace=wrap;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);" value="Layer 2: Clinical Rules" vertex="1">
+          <mxGeometry height="213" width="213" x="124" y="1734" as="geometry" />
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-17" parent="1" style="whiteSpace=wrap;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);" value="Layer 3: Cohere VLM" vertex="1">
+          <mxGeometry height="54" width="208" x="196" y="2021" as="geometry" />
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-18" parent="1" style="rhombus;strokeWidth=2;whiteSpace=wrap;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);" value="Layer 4: Re-Scan Agent" vertex="1">
+          <mxGeometry height="219" width="219" x="354" y="2149" as="geometry" />
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-19" parent="1" style="whiteSpace=wrap;strokeWidth=2;fillColor=#d4edda;strokeColor=#28a745;fontColor=light-dark(#333333,#cccccc);" value="Verified Spatial Tokens" vertex="1">
+          <mxGeometry height="54" width="222" x="179" y="2442" as="geometry" />
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-20" parent="1" style="whiteSpace=wrap;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);" value="Phase 4: Graph Ingestion" vertex="1">
+          <mxGeometry height="54" width="237" x="172" y="2596" as="geometry" />
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-21" parent="1" style="shape=cylinder3;boundedLbl=1;backgroundOutline=1;size=10;strokeWidth=2;whiteSpace=wrap;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);" value="Nodes: Patient, Document, Entity" vertex="1">
+          <mxGeometry height="110" width="215" x="183" y="2700" as="geometry" />
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-22" parent="1" style="whiteSpace=wrap;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);" value="Edges: CONTAINS_ENTITY with x,y coords" vertex="1">
+          <mxGeometry height="78" width="260" x="143" y="2860" as="geometry" />
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-23" parent="1" style="whiteSpace=wrap;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);" value="Sovereign Graph-RAG Query" vertex="1">
+          <mxGeometry height="54" width="260" x="481" y="2872" as="geometry" />
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-24" edge="1" parent="1" source="TnlXCgz8V9hC-B4ATv-N-5" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=1;entryX=0.5;entryY=0;rounded=0;" target="TnlXCgz8V9hC-B4ATv-N-6" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-25" edge="1" parent="1" source="TnlXCgz8V9hC-B4ATv-N-6" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=1;entryX=0.5;entryY=0;rounded=0;" target="TnlXCgz8V9hC-B4ATv-N-7" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-26" edge="1" parent="1" source="TnlXCgz8V9hC-B4ATv-N-7" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=1;entryX=0.5;entryY=0;rounded=0;" target="TnlXCgz8V9hC-B4ATv-N-8" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-27" edge="1" parent="1" source="TnlXCgz8V9hC-B4ATv-N-8" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=1;entryX=0.5;entryY=0;rounded=0;" target="TnlXCgz8V9hC-B4ATv-N-9" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-28" edge="1" parent="1" source="TnlXCgz8V9hC-B4ATv-N-9" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=1;entryX=0.5;entryY=0;rounded=0;" target="TnlXCgz8V9hC-B4ATv-N-10" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-29" edge="1" parent="1" source="TnlXCgz8V9hC-B4ATv-N-10" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=1;entryX=0.5;entryY=0;rounded=0;" target="TnlXCgz8V9hC-B4ATv-N-11" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-30" edge="1" parent="1" source="TnlXCgz8V9hC-B4ATv-N-11" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=1;entryX=0.5;entryY=0;rounded=0;" target="TnlXCgz8V9hC-B4ATv-N-12" value="Detects Column Jumps">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-31" edge="1" parent="1" source="TnlXCgz8V9hC-B4ATv-N-12" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=0.99;entryX=0.5;entryY=-0.01;rounded=0;" target="TnlXCgz8V9hC-B4ATv-N-13" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-32" edge="1" parent="1" source="TnlXCgz8V9hC-B4ATv-N-13" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=0.99;entryX=0.5;entryY=-0.01;rounded=0;" target="TnlXCgz8V9hC-B4ATv-N-14" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-33" edge="1" parent="1" source="TnlXCgz8V9hC-B4ATv-N-14" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=0.99;entryX=0.5;entryY=0;rounded=0;" target="TnlXCgz8V9hC-B4ATv-N-15" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-34" edge="1" parent="1" source="TnlXCgz8V9hC-B4ATv-N-15" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=1;entryX=0.5;entryY=0;rounded=0;" target="TnlXCgz8V9hC-B4ATv-N-16" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-35" edge="1" parent="1" source="TnlXCgz8V9hC-B4ATv-N-16" style="curved=1;startArrow=none;endArrow=block;exitX=0.74;exitY=1;entryX=0.5;entryY=0;rounded=0;" target="TnlXCgz8V9hC-B4ATv-N-17" value="Suspicious Dosage/Drug">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="300" y="1984" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-36" edge="1" parent="1" source="TnlXCgz8V9hC-B4ATv-N-17" style="curved=1;startArrow=none;endArrow=block;exitX=0.83;exitY=1;entryX=0.5;entryY=0;rounded=0;" target="TnlXCgz8V9hC-B4ATv-N-18" value="Verifies Pixel-Patch">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="463" y="2112" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-37" edge="1" parent="1" source="TnlXCgz8V9hC-B4ATv-N-16" style="curved=1;startArrow=none;endArrow=block;exitX=0.25;exitY=1;entryX=0.25;entryY=-0.01;rounded=0;" target="TnlXCgz8V9hC-B4ATv-N-19" value="Clean">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="159" y="1984" />
+              <mxPoint x="159" y="2405" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-38" edge="1" parent="1" source="TnlXCgz8V9hC-B4ATv-N-17" style="curved=1;startArrow=none;endArrow=block;exitX=0.48;exitY=1;entryX=0.5;entryY=-0.01;rounded=0;" target="TnlXCgz8V9hC-B4ATv-N-19" value="Matches">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="290" y="2112" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-39" edge="1" parent="1" source="TnlXCgz8V9hC-B4ATv-N-18" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=1;entryX=0.83;entryY=-0.01;rounded=0;" target="TnlXCgz8V9hC-B4ATv-N-19" value="Enhanced TrOCR">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="463" y="2405" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-40" edge="1" parent="1" source="TnlXCgz8V9hC-B4ATv-N-19" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=0.99;entryX=0.5;entryY=-0.01;rounded=0;" target="TnlXCgz8V9hC-B4ATv-N-20" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-41" edge="1" parent="1" source="TnlXCgz8V9hC-B4ATv-N-20" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=0.99;entryX=0.5;entryY=0;rounded=0;" target="TnlXCgz8V9hC-B4ATv-N-21" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-42" edge="1" parent="1" source="TnlXCgz8V9hC-B4ATv-N-21" style="curved=1;startArrow=none;endArrow=block;exitX=0.44;exitY=1;entryX=0.5;entryY=0;rounded=0;" target="TnlXCgz8V9hC-B4ATv-N-22" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="273" y="2835" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="TnlXCgz8V9hC-B4ATv-N-43" edge="1" parent="1" source="TnlXCgz8V9hC-B4ATv-N-21" style="curved=1;dashed=1;dashPattern=2 3;startArrow=none;endArrow=block;exitX=0.54;exitY=1;entryX=0;entryY=0;rounded=0;" target="TnlXCgz8V9hC-B4ATv-N-23" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="303" y="2835" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
