@@ -1,4 +1,4 @@
-﻿## LINNAEA Task
+## LINNAEA Task
 
 Medical document AI pipeline for extracting, validating, grounding, and querying clinical information from scanned records.
 
@@ -74,7 +74,9 @@ The codebase therefore favors:
 ```text
 LINNAEA_task/
 |-- data/
+|   `-- database.xlsx
 |-- src/
+|   |-- drug_dictionary.py
 |   |-- graph/
 |   |   |-- graph_builder.py
 |   |   |-- graph_rag.py
@@ -134,22 +136,38 @@ LINNAEA_task/
 - minimal prompt optimization loop
 - safe fallback when AdalFlow imports are unavailable
 
+### [`src/drug_dictionary.py`](./src/drug_dictionary.py)
+
+- loads normalized token-to-label drug mappings from physical Excel storage
+- strict schema enforcement for required properties
+- automatic type safety conversions
+
 ## Setup
 
-### 1. Create and activate a virtual environment
+### 1. Start Neo4j Database
+
+You will need a running Neo4j instance for the knowledge graph stages. The easiest method is via Docker:
+
+```powershell
+docker run -d --name neo4j-linnaea -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/password neo4j:latest
+```
+
+*(Allow 10-15 seconds for the database to fully initialize).*
+
+### 2. Create and activate a virtual environment
 
 ```powershell
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 ```
 
-### 2. Install dependencies
+### 3. Install dependencies
 
 ```powershell
 pip install -r requirements.txt
 ```
 
-### 3. Prepare environment variables
+### 4. Prepare environment variables
 
 Create a `.env` file in the project root:
 
@@ -158,14 +176,13 @@ HF_TOKEN=your_huggingface_token
 GROQ_API_KEY=your_groq_api_key
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
-NEO4J_PASSWORD=your_password
+NEO4J_PASSWORD=password
 ```
 
 Notes:
 
 - `HF_TOKEN` may be needed for model download access.
 - `GROQ_API_KEY` is required only if you want VLM validation enabled.
-- `Neo4j` must be running if you want graph ingestion/querying.
 
 ## Running The Pipeline
 

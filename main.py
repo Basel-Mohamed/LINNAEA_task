@@ -1,3 +1,4 @@
+"""Main entry point orchestrating the LINNAEA data extraction and processing pipeline."""
 from __future__ import annotations
 
 import asyncio
@@ -18,6 +19,14 @@ load_dotenv()
 
 
 def visualize_extractions(image_path: str, tokens: list, output_path: str = "visualized_output.jpg") -> None:
+    """
+    Draw bounding boxes and recognized text on a copy of the input image and save it.
+
+    Args:
+        image_path: Path to the original input image.
+        tokens: List of extracted spatial tokens.
+        output_path: Path where the annotated image will be saved.
+    """
     image = cv2.imread(image_path)
     if image is None:
         print(f"Could not read image: {image_path}")
@@ -33,6 +42,15 @@ def visualize_extractions(image_path: str, tokens: list, output_path: str = "vis
 
 
 def render_active_medications_answer(records: list[dict]) -> str:
+    """
+    Format a human-readable summary of active medications retrieved from the database.
+
+    Args:
+        records: A list of dicts returning medication names.
+
+    Returns:
+        A synthesized string answering query regarding the patient's medications.
+    """
     if not records:
         return "No active medications were found for this patient."
     medications = ", ".join(record["medication"] for record in records)
@@ -40,6 +58,13 @@ def render_active_medications_answer(records: list[dict]) -> str:
 
 
 def main() -> None:
+    """
+    Execute the main data ingestion and processing pipeline:
+    1. OCR extraction.
+    2. Spatial layout audit.
+    3. VLM validation.
+    4. Knowledge graph ingestion and Graph RAG querying.
+    """
     print("Initializing LINNAEA pipeline\n")
 
     project_root = Path(__file__).resolve().parent
