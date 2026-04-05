@@ -1,118 +1,127 @@
 """
-main.py
-=======
-LINNAEΛ Dark Data Processing Pipeline
-End-to-End Orchestrator
-
-This script simulates the ingestion of a faded 1985 medical record, 
-running it through the Extractor, Spatial Audit, VLM Validator, and Graph Builder.
+main.py  (v2 — Groq backend)
+=============================
+LINNAEΛ Dark Data Processing Pipeline — End-to-End Orchestrator
 """
 
 import os
+import asyncio
+import cv2
 from dotenv import load_dotenv
 
-# Import our custom modules
 from src.ocr.extractor import PrescriptionExtractor
 from src.ocr.spatial_tracker import SpatialAudit
 from src.ocr.validator import ValidatorAgent
 from src.graph.graph_builder import ClinicalGraphBuilder
 
-# Load environment variables (OpenAI Key, Neo4j credentials, HF Token)
 load_dotenv()
 
-def main():
-    print("🚀 Initializing LINNAEΛ Sovereign Infrastructure Pipeline...\n")
 
-    # 1. Initialize Configuration & Mock Database
-    # In a real scenario, drug_dict is loaded from database.xlsx
-    drug_dict = {
-        "amoxicillin": 1,
-        "paracetamol": 1,
-        "omeprazole": 1,
-        "hydrocortisone": 1,
-        "mupirocin": 1,
-        "tablet": 0,
-        "daily": 0
-    }
-    
-    # Define test parameters
-    test_image_path = "data/raw/sample_prescription_1985.jpg" # Replace with an actual test image
-    patient_id = "PATIENT_8847"
-    doc_id = "DOC_1985_A"
-    
-    # Ensure file exists before proceeding
-    if not os.path.exists(test_image_path):
-        print(f"⚠️ Test image not found at {test_image_path}. Please place a sample image there to run the pipeline.")
+def visualize_extractions(image_path: str, tokens: list,
+                           output_path: str = "visualized_output.jpg"):
+    img = cv2.imread(image_path)
+    if img is None:
+        print(f"⚠️  Could not read image: {image_path}")
         return
 
-    # 2. Initialize Agents
-    print("Loading Extractor Models (YOLO + TrOCR)...")
-    extractor = PrescriptionExtractor(hf_token=os.getenv("HF_TOKEN"))
-    
+    for token in tokens:
+        cv2.rectangle(img,
+                      (token.x_min, token.y_min),
+                      (token.x_max, token.y_max),
+                      (0, 255, 0), 2)
+        y_text = max(token.y_min - 5, 15)
+        cv2.putText(img, token.text,
+                    (token.x_min, y_text),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+
+    cv2.imwrite(output_path, img)
+    print(f"👁️  Saved: {output_path}")
+
+
+def main():
+    print("🚀 Initializing LINNAEΛ Sovereign Infrastructure Pipeline…\n")
+
+    drug_dict = {
+        "amoxicillin": 1, "paracetamol": 1,
+        "omeprazole":  1, "hydrocortisone": 1,
+        "tablet": 0,      "daily": 0,
+    }
+
+    test_image_path = "data/raw/sample_prescription_1985.jpg"
+    if not os.path.exists(test_image_path):
+        print(f"⚠️  Image not found: {test_image_path}")
+        return
+
+    # ── load models ───────────────────────────────────────────────────────────
+    print("Loading Extractor (YOLO + TrOCR)…")
+    extractor = PrescriptionExtractor(
+        hf_token=os.getenv("HF_TOKEN"),
+        yolo_model="RoyRud1902/yolo11n-text",
+        trocr_model="microsoft/trocr-large-handwritten",
+    )
+
     audit_agent = SpatialAudit(drug_dict=drug_dict)
-    
-    print("Loading VLM Validator Agent (Gemini 2.5 Flash via AI Studio)...")
+
+    print("Loading VLM Validator (Groq — Llama-4-Scout)…")
     validator_agent = ValidatorAgent(
         processor=extractor.processor,
         trocr_model=extractor.trocr,
         device=extractor.device,
         drug_dict=drug_dict,
-        gemini_api_key=os.getenv("GEMINI_API_KEY"),
-        vlm_on_warn=True
-    )
-    
-    print("Connecting to Knowledge Graph (Neo4j)...")
-    graph_builder = ClinicalGraphBuilder(
-        uri=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
-        user=os.getenv("NEO4J_USER", "neo4j"),
-        password=os.getenv("NEO4J_PASSWORD", "password")
+        groq_api_key=os.getenv("GROQ_API_KEY"),   
+        vlm_on_warn=True,
     )
 
-    # ---------------------------------------------------------
-    # THE PIPELINE EXECUTION
-    # ---------------------------------------------------------
-    
-    print(f"\n--- Phase 1: Extraction & Spatial Mapping ---")
-    # Extract spatial tokens from the image
+    print("Connecting to Neo4j…")
+    graph_builder = ClinicalGraphBuilder(
+        uri=os.getenv("NEO4J_URI",      "bolt://localhost:7687"),
+        user=os.getenv("NEO4J_USER",    "neo4j"),
+        password=os.getenv("NEO4J_PASSWORD", "password"),
+    )
+
+    # ── pipeline ──────────────────────────────────────────────────────────────
+    print("\n--- Phase 1: Extraction & Spatial Mapping ---")
     raw_tokens_list = extractor.extract([test_image_path])
-    raw_tokens = raw_tokens_list[0] if raw_tokens_list else []
-    
+    raw_tokens      = raw_tokens_list[0] if raw_tokens_list else []
+
     if not raw_tokens:
-        print("❌ No text detected. Aborting pipeline.")
+        print("❌ No text detected. Aborting.")
         return
 
-    print(f"\n--- Phase 2: The Structural Audit (Task 1) ---")
-    # Verify reading order and build the spatial index
+    visualize_extractions(test_image_path, raw_tokens, "output_phase1_ocr.jpg")
+
+    print("\n--- Phase 2: Structural Audit (Dynamic Anchors) ---")
     audit_report = audit_agent.run(raw_tokens)
-    
-    print(f"\n--- Phase 3: The VLLM Validation Engine (Task 2) ---")
-    # Run tokens through clinical rules and the VLM "Mass Spectrometer"
-    drug_pairs = [(k, str(v)) for k, v in drug_dict.items()]
-    validated_reports = validator_agent.validate_all(raw_tokens, drug_pairs)
-    
-    # Extract the final, verified text tokens
+
+    print("\n--- Phase 3: VLM Validation (Groq — Async) ---")
+    drug_pairs       = [(k, str(v)) for k, v in drug_dict.items()]
+    validated_reports = asyncio.run(
+        validator_agent.validate_all_async(raw_tokens, drug_pairs)
+    )
+
     verified_tokens = []
     for rep in validated_reports:
-        # Update the token's text with the VLM/ReScan corrected text
-        rep.token.text = rep.final_text 
+        rep.token.text = rep.final_text
         verified_tokens.append(rep.token)
 
-    print(f"\n--- Phase 4: Graph Ingestion (Task 3) ---")
-    # Bind the verified spatial tokens into the Knowledge Graph
+    visualize_extractions(test_image_path, verified_tokens, "output_phase3_verified.jpg")
+
+    print("\n--- Phase 4: Graph Ingestion ---")
     try:
         graph_builder.ingest_document(
-            patient_id=patient_id, 
-            doc_id=doc_id, 
-            date="1985-10-12", 
-            tokens=verified_tokens
+            patient_id="PATIENT_8847",
+            doc_id="DOC_1985_A",
+            date="1985-10-12",
+            tokens=verified_tokens,
         )
-        print("✅ Successfully ingested document into Neo4j Knowledge Graph.")
+        print("✅ Ingested into Neo4j.")
     except Exception as e:
-        print(f"⚠️ Graph ingestion bypassed (Neo4j not running): {e}")
+        print(f"⚠️  Graph ingestion bypassed: {e}")
     finally:
         graph_builder.close()
 
-    print("\n🏁 Pipeline Execution Complete.")
+    print("\n🏁 Pipeline complete.")
+
 
 if __name__ == "__main__":
     main()
