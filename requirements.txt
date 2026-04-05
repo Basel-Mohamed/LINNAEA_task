@@ -1,37 +1,38 @@
-# ── Core ML ──────────────────────────────────────────────────────────────────
+# Core ML
 torch>=2.0.0
 torchvision>=0.15.0
 
-# ── Computer Vision ───────────────────────────────────────────────────────────
-ultralytics>=8.0.0
+# Computer Vision
 Pillow>=9.0.0
 opencv-python>=4.6.0
+easyocr>=1.7.1
 
-# ── OCR / Transformers ────────────────────────────────────────────────────────
+# OCR / Transformers
 transformers>=4.35.0
 huggingface_hub>=0.20.0
 safetensors>=0.4.0
 
-# ── NLP / Spell Correction ────────────────────────────────────────────────────
+# NLP / Spell Correction
 symspellpy>=6.9.0
 
-# ── Graph Database ────────────────────────────────────────────────────────────
+# Graph Database
 neo4j>=5.0.0
 
-# ── Prompt Optimization ───────────────────────────────────────────────────────
+# Prompt Optimization
 adalflow>=0.1.0
+openai>=1.0.0
 
-# ── Data Handling ─────────────────────────────────────────────────────────────
+# Data Handling
 pandas>=1.5.0
 numpy>=1.23.0
 openpyxl>=3.0.0
 
-# ── Utilities ─────────────────────────────────────────────────────────────────
+# Utilities
 gdown>=4.7.0
 python-dotenv>=1.0.0
 pyyaml>=6.0.0
 tqdm>=4.64.0
 
-# ── VLM / AI ────────────────────────────────────────────────────────────────
+# VLM / AI
 dotenv
 groq

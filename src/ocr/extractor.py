@@ -1,129 +1,94 @@
-"""
-extractor.py  (v2)
-==================
-Key improvements over v1:
-  1. Line-level box merging  — TrOCR gets full-line crops, not word fragments.
-  2. Zone-aware preprocessing — letterhead zone uses a contrast-boosted crop;
-     handwritten body uses the original cleaned image.
-  3. Adaptive crop padding   — very thin boxes get extra top/bottom padding.
-  4. Source coords stored    — token x/y always refer to the ORIGINAL image,
-     ready for VLM cropping without any extra scaling.
-"""
-
-import os
-import torch
-import numpy as np
+"""Text detection with EasyOCR and recognition with TrOCR."""
+from __future__ import annotations
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Optional
-from PIL import Image, ImageOps, ImageFilter, ImageEnhance
-
-from ultralytics import YOLO
+import numpy as np
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+import torch
+import easyocr
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
-from huggingface_hub import hf_hub_download
-
+from transformers.utils import logging as transformers_logging
 from src.ocr.vision_utils import ClinicalImageEnhancer
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Data contract
-# ─────────────────────────────────────────────────────────────────────────────
-
 @dataclass
 class SpatialToken:
-    text:         str
-    x_min:        int
-    y_min:        int
-    x_max:        int
-    y_max:        int
-    x_center:     float   # normalised to original image dims
-    y_center:     float
-    width_norm:   float
-    height_norm:  float
-    confidence:   float
-    region_id:    int
-    source_path:  str = ""
-    zone:         str = "body"
+    """OCR output tied to a crop in the source document."""
+
+    text: str
+    x_min: int
+    y_min: int
+    x_max: int
+    y_max: int
+    x_center: float
+    y_center: float
+    width_norm: float
+    height_norm: float
+    confidence: float
+    region_id: int
+    source_path: str = ""
+    zone: str = "body"
 
     @property
     def bbox(self) -> dict:
-        return dict(x_min=self.x_min, y_min=self.y_min,
-                    x_max=self.x_max, y_max=self.y_max)
+        return {
+            "x_min": self.x_min,
+            "y_min": self.y_min,
+            "x_max": self.x_max,
+            "y_max": self.y_max,
+        }
 
     def to_dict(self) -> dict:
         return {
-            "region_id":   self.region_id,
-            "text":        self.text,
-            "bbox":        self.bbox,
-            "x_center":    round(self.x_center,   4),
-            "y_center":    round(self.y_center,   4),
-            "width_norm":  round(self.width_norm,  4),
+            "region_id": self.region_id,
+            "text": self.text,
+            "bbox": self.bbox,
+            "x_center": round(self.x_center, 4),
+            "y_center": round(self.y_center, 4),
+            "width_norm": round(self.width_norm, 4),
             "height_norm": round(self.height_norm, 4),
-            "confidence":  round(self.confidence,  4),
-            "zone":        self.zone,
+            "confidence": round(self.confidence, 4),
+            "zone": self.zone,
             "source_path": self.source_path,
         }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Line merger  —  FIX #1: give TrOCR full lines, not word fragments
-# ─────────────────────────────────────────────────────────────────────────────
-
 class LineMerger:
-    """
-    Clusters YOLO word-boxes into line-level groups.
-
-    Two boxes belong to the same line when their vertical centres differ by
-    less than `y_tol` × the average box height.  Within a line, boxes are
-    merged left-to-right and their bounding union is used as the crop.
-    """
+    """Merge nearby word boxes into line-level regions for TrOCR."""
 
     def __init__(self, y_tol: float = 0.55, x_gap_tol: float = 0.08):
-        self.y_tol     = y_tol      # fraction of avg height
-        self.x_gap_tol = x_gap_tol  # max horizontal gap (normalised 0-1)
+        self.y_tol = y_tol
+        self.x_gap_tol = x_gap_tol
 
-    def merge(self, boxes_norm: np.ndarray, confs: np.ndarray,
-              img_w: int, img_h: int):
-        """
-        Parameters
-        ----------
-        boxes_norm : (N, 4) xywhn in [0, 1]  (from YOLO)
-        confs      : (N,)   detection scores
-        img_w/h    : original image pixel dimensions
-
-        Returns
-        -------
-        List of dicts, each with keys:
-            x_min, y_min, x_max, y_max  (pixel coords in orig image)
-            conf                         (mean confidence)
-        """
+    def merge(self, boxes_norm: np.ndarray, confs: np.ndarray, img_w: int, img_h: int) -> list[dict]:
+        """Group normalized detection boxes into line crops in image coordinates."""
         if len(boxes_norm) == 0:
             return []
 
-        # Convert to pixel absolute coords
         abs_boxes = []
-        for (xc, yc, w, h), c in zip(boxes_norm, confs):
-            abs_boxes.append({
-                "x_min": (xc - w / 2) * img_w,
-                "x_max": (xc + w / 2) * img_w,
-                "y_min": (yc - h / 2) * img_h,
-                "y_max": (yc + h / 2) * img_h,
-                "yc":    yc * img_h,
-                "h":     h  * img_h,
-                "conf":  float(c),
-            })
+        for (xc, yc, w, h), confidence in zip(boxes_norm, confs):
+            abs_boxes.append(
+                {
+                    "x_min": (xc - w / 2) * img_w,
+                    "x_max": (xc + w / 2) * img_w,
+                    "y_min": (yc - h / 2) * img_h,
+                    "y_max": (yc + h / 2) * img_h,
+                    "yc": yc * img_h,
+                    "h": h * img_h,
+                    "conf": float(confidence),
+                }
+            )
 
-        # Sort top-to-bottom then left-to-right
-        abs_boxes.sort(key=lambda b: (b["yc"], b["x_min"]))
+        abs_boxes.sort(key=lambda box: (box["yc"], box["x_min"]))
 
-        lines = []
+        lines: list[list[dict]] = []
         for box in abs_boxes:
             placed = False
             for line in lines:
-                avg_h   = np.mean([b["h"] for b in line])
-                line_yc = np.mean([b["yc"] for b in line])
+                avg_h = float(np.mean([entry["h"] for entry in line]))
+                line_yc = float(np.mean([entry["yc"] for entry in line]))
                 if abs(box["yc"] - line_yc) < self.y_tol * avg_h:
-                    # Check horizontal gap — don't merge across large gaps
-                    rightmost = max(b["x_max"] for b in line)
+                    rightmost = max(entry["x_max"] for entry in line)
                     gap = (box["x_min"] - rightmost) / img_w
                     if gap < self.x_gap_tol:
                         line.append(box)
@@ -134,93 +99,160 @@ class LineMerger:
 
         merged = []
         for line in lines:
-            merged.append({
-                "x_min": int(max(0,     min(b["x_min"] for b in line) - 4)),
-                "y_min": int(max(0,     min(b["y_min"] for b in line) - 4)),
-                "x_max": int(min(img_w, max(b["x_max"] for b in line) + 4)),
-                "y_max": int(min(img_h, max(b["y_max"] for b in line) + 4)),
-                "conf":  float(np.mean([b["conf"] for b in line])),
-            })
+            merged.append(
+                {
+                    "x_min": int(max(0, min(box["x_min"] for box in line) - 4)),
+                    "y_min": int(max(0, min(box["y_min"] for box in line) - 4)),
+                    "x_max": int(min(img_w, max(box["x_max"] for box in line) + 4)),
+                    "y_max": int(min(img_h, max(box["y_max"] for box in line) + 4)),
+                    "conf": float(np.mean([box["conf"] for box in line])),
+                }
+            )
 
-        # Sort final lines top-to-bottom
-        merged.sort(key=lambda b: b["y_min"])
+        merged.sort(key=lambda box: box["y_min"])
         return merged
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Extractor
-# ─────────────────────────────────────────────────────────────────────────────
-
 class PrescriptionExtractor:
-    IMG_SIZE  = 640   # YOLO input resolution
-    CROP_W    = 768   # TrOCR input width  (wider = better for full lines)
-    CROP_H    = 128   # TrOCR input height
+    """Run EasyOCR detection and TrOCR recognition on medical document pages."""
+
+    CROP_W = 768
+    CROP_H = 128
 
     def __init__(
         self,
-        yolo_model:  str   = "RoyRud1902/yolo11n-text",
-        trocr_model: str   = "microsoft/trocr-large-handwritten",
-        trocr_proc:  str   = "microsoft/trocr-large-handwritten",
-        hf_token:    str   = None,
-        conf:        float = 0.45,   # slightly lower — we merge anyway
-        iou:         float = 0.5,
-        max_det:     int   = 100,
-        y_tol:       float = 0.55,   # LineMerger sensitivity
+        trocr_model: str = "microsoft/trocr-large-handwritten",
+        trocr_proc: str = "microsoft/trocr-large-handwritten",
+        hf_token: str | None = None,
+        easyocr_lang_list: list[str] | None = None,
+        easyocr_gpu: bool = True,
+        min_size: int = 10,
+        text_threshold: float = 0.7,
+        low_text: float = 0.4,
+        link_threshold: float = 0.4,
+        canvas_size: int = 2560,
+        mag_ratio: float = 1.0,
+        slope_ths: float = 0.1,
+        ycenter_ths: float = 0.5,
+        height_ths: float = 0.5,
+        width_ths: float = 0.5,
+        add_margin: float = 0.1,
+        y_tol: float = 0.55,
     ):
-        self.conf      = conf
-        self.iou       = iou
-        self.max_det   = max_det
-        self.device    = "cuda" if torch.cuda.is_available() else "cpu"
-        self.merger    = LineMerger(y_tol=y_tol)
-
-        print(f"[Extractor] device  : {self.device}")
-        print(f"[Extractor] loading YOLO …")
-        if "/" in yolo_model and not yolo_model.endswith(".pt"):
-            path = hf_hub_download(repo_id=yolo_model,
-                                   filename="best.pt", token=hf_token)
-            self.yolo = YOLO(path)
-        else:
-            self.yolo = YOLO(yolo_model)
-
-        print(f"[Extractor] loading TrOCR …")
-        self.processor = TrOCRProcessor.from_pretrained(
-            trocr_proc, use_safetensors=True, token=hf_token
+        self._require_runtime_dependencies()
+        self.device = "cuda" if torch and torch.cuda.is_available() else "cpu"
+        self.merger = LineMerger(y_tol=y_tol)
+        self.easyocr_lang_list = easyocr_lang_list or ["en", "ar"]
+        self.detect_kwargs = {
+            "min_size": min_size,
+            "text_threshold": text_threshold,
+            "low_text": low_text,
+            "link_threshold": link_threshold,
+            "canvas_size": canvas_size,
+            "mag_ratio": mag_ratio,
+            "slope_ths": slope_ths,
+            "ycenter_ths": ycenter_ths,
+            "height_ths": height_ths,
+            "width_ths": width_ths,
+            "add_margin": add_margin,
+        }
+        self.detector = easyocr.Reader(
+            self.easyocr_lang_list,
+            gpu=easyocr_gpu and self.device == "cuda",
+            detector=True,
+            recognizer=False,
+            download_enabled=True,
         )
-        self.trocr = VisionEncoderDecoderModel.from_pretrained(
-            trocr_model, use_safetensors=True, token=hf_token
-        ).to(self.device)
-        print("[Extractor] ready.\n")
 
-    # ── public API ────────────────────────────────────────────────────────────
-
-    def extract(self, image_paths: list[str]) -> list[list[SpatialToken]]:
-        return [self._process_single(p) for p in image_paths]
-
-    # ── internal ──────────────────────────────────────────────────────────────
-
-    def _run_yolo(self, pil_img: Image.Image):
-        resized = self._letterbox(pil_img)
-        results = self.yolo.predict(
-            source=resized, imgsz=self.IMG_SIZE,
-            device=0 if self.device == "cuda" else "cpu",
-            save=False, conf=self.conf, iou=self.iou,
-            max_det=self.max_det, verbose=False,
-        )
-        return results, resized
+        with self._suppress_transformers_startup_noise():
+            self.processor = TrOCRProcessor.from_pretrained(
+                trocr_proc,
+                use_safetensors=True,
+                token=hf_token,
+            )
+            self.trocr = VisionEncoderDecoderModel.from_pretrained(
+                trocr_model,
+                use_safetensors=True,
+                token=hf_token,
+            ).to(self.device)
 
     @staticmethod
-    def _letterbox(img: Image.Image, size: int = 640) -> Image.Image:
-        ratio  = min(size / img.width, size / img.height)
-        nw, nh = int(img.width * ratio), int(img.height * ratio)
-        return ImageOps.pad(img.resize((nw, nh), Image.Resampling.LANCZOS),
-                            (size, size), color=(114, 114, 114))
+    def _require_runtime_dependencies() -> None:
+        missing = []
+        if torch is None:
+            missing.append("torch")
+        if easyocr is None:
+            missing.append("easyocr")
+        if TrOCRProcessor is None or VisionEncoderDecoderModel is None:
+            missing.append("transformers")
+        if missing:
+            raise ImportError(
+                "PrescriptionExtractor requires the following packages at runtime: "
+                + ", ".join(sorted(set(missing)))
+            )
+
+    @staticmethod
+    @contextmanager
+    def _suppress_transformers_startup_noise():
+        """Hide harmless TrOCR startup warnings during model initialization."""
+        if transformers_logging is None:
+            yield
+            return
+        previous_verbosity = transformers_logging.get_verbosity()
+        try:
+            transformers_logging.set_verbosity_error()
+            yield
+        finally:
+            transformers_logging.set_verbosity(previous_verbosity)
+
+    def extract(self, image_paths: list[str]) -> list[list[SpatialToken]]:
+        """Extract OCR tokens from each image path."""
+        return [self._process_single(path) for path in image_paths]
+
+    @staticmethod
+    def _normalize_box(x_min: int, x_max: int, y_min: int, y_max: int, img_w: int, img_h: int) -> list[float]:
+        """Convert an absolute rectangle into normalized xywh format."""
+        return [
+            ((x_min + x_max) / 2) / img_w,
+            ((y_min + y_max) / 2) / img_h,
+            (x_max - x_min) / img_w,
+            (y_max - y_min) / img_h,
+        ]
+
+    @staticmethod
+    def _freeform_to_rect(points: list[list[int]]) -> tuple[int, int, int, int]:
+        """Collapse a quadrilateral box into an axis-aligned rectangle."""
+        xs = [point[0] for point in points]
+        ys = [point[1] for point in points]
+        return min(xs), max(xs), min(ys), max(ys)
+
+    def _run_detector(self, pil_img: Image.Image) -> tuple[list[list[float]], list[float]]:
+        """Run EasyOCR detection and normalize all returned boxes."""
+        image_array = np.array(pil_img)
+        horizontal_list, free_list = self.detector.detect(image_array, **self.detect_kwargs)
+        horizontal_boxes = horizontal_list[0] if horizontal_list else []
+        freeform_boxes = free_list[0] if free_list else []
+
+        boxes_norm: list[list[float]] = []
+        confidences: list[float] = []
+
+        for x_min, x_max, y_min, y_max in horizontal_boxes:
+            boxes_norm.append(
+                self._normalize_box(int(x_min), int(x_max), int(y_min), int(y_max), pil_img.width, pil_img.height)
+            )
+            confidences.append(1.0)
+
+        for points in freeform_boxes:
+            x_min, x_max, y_min, y_max = self._freeform_to_rect(points)
+            boxes_norm.append(
+                self._normalize_box(int(x_min), int(x_max), int(y_min), int(y_max), pil_img.width, pil_img.height)
+            )
+            confidences.append(1.0)
+
+        return boxes_norm, confidences
 
     def _preprocess_crop(self, crop: Image.Image, is_printed: bool) -> Image.Image:
-        """
-        Zone-aware enhancement before TrOCR.
-        Printed letterhead → contrast boost + sharpen.
-        Handwritten body   → mild sharpen only.
-        """
+        """Apply lightweight enhancement tailored to printed or handwritten regions."""
         if is_printed:
             crop = ImageEnhance.Contrast(crop).enhance(2.0)
             crop = ImageEnhance.Sharpness(crop).enhance(2.0)
@@ -229,108 +261,56 @@ class PrescriptionExtractor:
         return crop
 
     def _run_trocr(self, crop: Image.Image) -> str:
-        # Pad to fixed rectangular shape that TrOCR likes
-        crop_padded = ImageOps.pad(
-            crop, (self.CROP_W, self.CROP_H), color=(255, 255, 255)
-        )
-        pv = self.processor(
-            crop_padded, return_tensors="pt"
-        ).pixel_values.to(self.device)
+        """Recognize one cropped line image with TrOCR."""
+        crop_padded = ImageOps.pad(crop, (self.CROP_W, self.CROP_H), color=(255, 255, 255))
+        pixel_values = self.processor(crop_padded, return_tensors="pt").pixel_values.to(self.device)
         with torch.no_grad():
-            ids = self.trocr.generate(pv, max_new_tokens=128)
-        return self.processor.batch_decode(
-            ids, skip_special_tokens=True
-        )[0].strip()
+            generated_ids = self.trocr.generate(pixel_values, max_new_tokens=128)
+        return self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
 
     def _process_single(self, image_path: str) -> list[SpatialToken]:
+        """Detect line regions on one page, then recognize each region with TrOCR."""
         try:
-            raw   = Image.open(image_path).convert("RGB")
+            raw = Image.open(image_path).convert("RGB")
             clean = ClinicalImageEnhancer.remove_stamps_from_image(raw)
-            w_orig, h_orig = clean.size
+            orig_width, orig_height = clean.size
 
-            # ── YOLO on 640×640 letterboxed image ────────────────────────────
-            results, _ = self._run_yolo(clean)
-            boxes_obj  = results[0].boxes
-            if boxes_obj is None or len(boxes_obj) == 0:
-                print(f"[Extractor] no regions in {image_path}")
+            coords_norm, confs = self._run_detector(clean)
+            if not coords_norm:
                 return []
+            line_regions = self.merger.merge(np.array(coords_norm), np.array(confs), orig_width, orig_height)
 
-            coords_norm = boxes_obj.xywhn.cpu().numpy()
-            confs       = boxes_obj.conf.cpu().numpy()
-
-            # ── FIX #1: merge word-boxes → line-boxes ─────────────────────────
-            # YOLO normalised coords are in 640-space; convert to orig-image space
-            s     = self.IMG_SIZE
-            ratio = min(s / w_orig, s / h_orig)
-            pad_l = (s - int(w_orig * ratio)) // 2
-            pad_t = (s - int(h_orig * ratio)) // 2
-
-            def to_orig(xc_n, yc_n, wn, hn):
-                """Map normalised 640-space → original pixel coords."""
-                x_min_640 = (xc_n - wn / 2) * s
-                y_min_640 = (yc_n - hn / 2) * s
-                x_max_640 = (xc_n + wn / 2) * s
-                y_max_640 = (yc_n + hn / 2) * s
-                return (
-                    int(max(0, (x_min_640 - pad_l) / ratio)),
-                    int(max(0, (y_min_640 - pad_t) / ratio)),
-                    int(min(w_orig, (x_max_640 - pad_l) / ratio)),
-                    int(min(h_orig, (y_max_640 - pad_t) / ratio)),
-                )
-
-            # Build orig-space normalised array for LineMerger
-            orig_boxes_norm = []
-            for (xc, yc, wn, hn) in coords_norm:
-                x0, y0, x1, y1 = to_orig(xc, yc, wn, hn)
-                orig_boxes_norm.append([
-                    ((x0 + x1) / 2) / w_orig,
-                    ((y0 + y1) / 2) / h_orig,
-                    (x1 - x0)       / w_orig,
-                    (y1 - y0)       / h_orig,
-                ])
-            orig_boxes_norm = np.array(orig_boxes_norm)
-
-            line_regions = self.merger.merge(orig_boxes_norm, confs,
-                                             w_orig, h_orig)
-
-            # ── Build SpatialTokens ───────────────────────────────────────────
             tokens: list[SpatialToken] = []
-
-            # Simple heuristic: top 15% of page = letterhead (printed)
-            letterhead_y_thresh = h_orig * 0.15
+            letterhead_y_thresh = orig_height * 0.15
 
             for idx, region in enumerate(line_regions):
-                x0, y0 = region["x_min"], region["y_min"]
-                x1, y1 = region["x_max"], region["y_max"]
-
+                x0, y0, x1, y1 = region["x_min"], region["y_min"], region["x_max"], region["y_max"]
                 crop = clean.crop((x0, y0, x1, y1))
-
-                # Ensure minimum height for TrOCR (avoids squeezed crops)
                 crop_h = y1 - y0
                 if crop_h < 24:
                     pad_px = (24 - crop_h) // 2
                     crop = ImageOps.expand(crop, border=(0, pad_px), fill=255)
 
-                is_printed = (y0 < letterhead_y_thresh)
-                crop = self._preprocess_crop(crop, is_printed)
+                crop = self._preprocess_crop(crop, is_printed=y0 < letterhead_y_thresh)
                 text = self._run_trocr(crop)
 
-                xc_n = ((x0 + x1) / 2) / w_orig
-                yc_n = ((y0 + y1) / 2) / h_orig
-
-                tokens.append(SpatialToken(
-                    text=text,
-                    x_min=x0, y_min=y0, x_max=x1, y_max=y1,
-                    x_center=xc_n, y_center=yc_n,
-                    width_norm=(x1 - x0) / w_orig,
-                    height_norm=(y1 - y0) / h_orig,
-                    confidence=region["conf"],
-                    region_id=idx,
-                    source_path=image_path,
-                ))
-
+                tokens.append(
+                    SpatialToken(
+                        text=text,
+                        x_min=x0,
+                        y_min=y0,
+                        x_max=x1,
+                        y_max=y1,
+                        x_center=((x0 + x1) / 2) / orig_width,
+                        y_center=((y0 + y1) / 2) / orig_height,
+                        width_norm=(x1 - x0) / orig_width,
+                        height_norm=(y1 - y0) / orig_height,
+                        confidence=region["conf"],
+                        region_id=idx,
+                        source_path=image_path,
+                    )
+                )
             return tokens
-
-        except Exception as exc:
+        except Exception as exc:  # pragma: no cover - runtime path
             print(f"[Extractor] ERROR {image_path}: {exc}")
             return []

@@ -1,42 +1,41 @@
-"""
-graph_rag.py
-============
-Task 3 — The Deterministic Query
+from __future__ import annotations
 
-Why a Graph prevents the "2018 Rider" hallucination:
-A flat vector search retrieves chunks based on cosine similarity. If the query 
-mentions a "Rider", the DB returns the 2018 chunk, and the LLM assumes it applies.
-In Graph RAG, we only traverse edges that are 'ACTIVE'.
-"""
+from typing import Any
+
 
 class SovereignGraphRAG:
     def __init__(self, builder):
         self.builder = builder
 
-    def query_active_medications(self, patient_id: str):
-        """
-        Only returns medications tied to the patient's documents, 
-        and extracts exactly WHERE they were on the page.
-        """
+    def query_active_medications(self, patient_id: str, doc_id: str | None = None) -> list[dict[str, Any]]:
         query = """
-            MATCH (p:Patient {id: $patient_id})-[:HAS_RECORD]->(d:Document)
-            MATCH (d)-[rel:CONTAINS_ENTITY]->(e:ClinicalEntity)
-            WHERE e.type = 'body'
-            RETURN e.text AS Medication, rel.x_center AS X, rel.y_center AS Y, d.id AS SourceDoc
+            MATCH (:Patient {id: $patient_id})-[:HAS_RECORD]->(d:Document)
+            MATCH (d)-[rel:CONTAINS_ENTITY]->(e:ClinicalEntity {patient_id: $patient_id, doc_id: d.id})
+            WHERE e.type = $entity_type
+              AND ($doc_id IS NULL OR d.id = $doc_id)
+            RETURN e.text AS medication,
+                   rel.x_center AS x_center,
+                   rel.y_center AS y_center,
+                   rel.confidence AS confidence,
+                   d.id AS source_doc
+            ORDER BY source_doc, y_center, x_center
         """
         with self.builder.driver.session() as session:
-            result = session.run(query, patient_id=patient_id)
+            result = session.run(
+                query,
+                patient_id=patient_id,
+                doc_id=doc_id,
+                entity_type="body",
+            )
             return [record.data() for record in result]
 
-    def query_policy_status(self, patient_id: str):
-        """
-        Prevents hallucinating an obsolete 2018 rider into a 2026 claim.
-        """
+    def query_policy_status(self, patient_id: str) -> list[dict[str, Any]]:
         query = """
-            MATCH (p:Patient {id: $patient_id})-[:SUBJECT_TO]->(r:PolicyRider)
-            WHERE r.status = 'ACTIVE'
-            RETURN r.year, r.id
+            MATCH (p:Patient {id: $patient_id})-[:BOUND_TO_POLICY]->(r:PolicyRider)
+            WHERE r.status = $status
+            RETURN r.year AS year, r.id AS policy_id
+            ORDER BY r.year DESC
         """
         with self.builder.driver.session() as session:
-            result = session.run(query, patient_id=patient_id)
+            result = session.run(query, patient_id=patient_id, status="ACTIVE")
             return [record.data() for record in result]

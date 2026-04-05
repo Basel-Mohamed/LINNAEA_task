@@ -1,443 +1,471 @@
-"""
-validator.py  (v3)
-==================
-Fixes:
-  1. ConfidenceGate thresholds raised — on degraded handwritten docs,
-     a YOLO conf of 0.85 still means "probably detected something" but
-     TrOCR can still misread it badly. We now WARN at < 0.92.
-  2. GarbageTextRule added — catches obviously garbled OCR output
-     (e.g. "dooroveguation", "kunahoe-human-system") based on:
-       a. Ratio of alpha chars to total
-       b. Unknown word clusters (heuristic)
-       c. Implausible character n-grams
-  3. AlwaysVLMForBody flag — optionally sends every body-zone token
-     to the VLM regardless of flags (set always_vlm_body=True).
-"""
-
-import re
+"""Rule-based and VLM-assisted validation for OCR tokens."""
+from __future__ import annotations
 import asyncio
 import base64
 import json
+import re
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from io import BytesIO
 from typing import Optional
-from dataclasses import dataclass, field
-from concurrent.futures import ThreadPoolExecutor
-
-from PIL import Image, ImageOps, ImageFilter
+from PIL import Image, ImageFilter, ImageOps
 import torch
-from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 from groq import Groq
-
 from src.ocr.extractor import SpatialToken
 
 
 DOSAGE_RANGES: dict[str, tuple[float, float]] = {
-    "paracetamol": (100,  1000), "amoxicillin": (125,  875),
-    "ibuprofen":   (100,   800), "metformin":   (500, 2000),
-    "omeprazole":  (10,     40), "default":     (0.1, 5000),
+    "paracetamol": (100, 1000),
+    "amoxicillin": (125, 875),
+    "ibuprofen": (100, 800),
+    "metformin": (500, 2000),
+    "omeprazole": (10, 40),
+    "default": (0.1, 5000),
 }
 
+ARABIC_RE = re.compile(r"[؀-ۿ]")
+LATIN_WORD_RE = re.compile(r"[A-Za-z]+")
+WORD_RE = re.compile(r"[\w؀-ۿ]+")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Data contracts
-# ─────────────────────────────────────────────────────────────────────────────
+
+def _contains_arabic(text: str) -> bool:
+    return bool(ARABIC_RE.search(text))
+
+
+def _latin_words(text: str) -> list[str]:
+    return LATIN_WORD_RE.findall(text)
+
+
+def _normalize_text(text: str) -> str:
+    lowered = text.casefold().strip()
+    return re.sub(r"\s+", " ", lowered)
+
+
+def _levenshtein_distance(left: str, right: str) -> int:
+    if left == right:
+        return 0
+    if not left:
+        return len(right)
+    if not right:
+        return len(left)
+
+    previous = list(range(len(right) + 1))
+    for i, lch in enumerate(left, start=1):
+        current = [i]
+        for j, rch in enumerate(right, start=1):
+            insert_cost = current[j - 1] + 1
+            delete_cost = previous[j] + 1
+            replace_cost = previous[j - 1] + (lch != rch)
+            current.append(min(insert_cost, delete_cost, replace_cost))
+        previous = current
+    return previous[-1]
+
+
+def _normalized_edit_distance(left: str, right: str) -> float:
+    normalized_left = _normalize_text(left)
+    normalized_right = _normalize_text(right)
+    longest = max(len(normalized_left), len(normalized_right), 1)
+    return _levenshtein_distance(normalized_left, normalized_right) / longest
+
 
 @dataclass
 class ValidationFlag:
-    rule: str; token: SpatialToken; detail: str; action: str; severity: str
+    """A deterministic validation outcome for one token."""
 
-    def __str__(self) -> str:
-        icon = {"ACCEPT": "✅", "WARN": "⚠️",
-                "RESCAN": "🔬", "REJECT": "❌"}.get(self.action, "?")
-        return (f"  {icon} [{self.severity}] {self.rule}\n"
-                f"     text: '{self.token.text}'\n"
-                f"     detail: {self.detail}")
+    rule: str
+    token: SpatialToken
+    detail: str
+    action: str
+    severity: str
 
 
 @dataclass
 class VLMVerdict:
-    ocr_text: str; vlm_reading: str; match: bool
-    confidence: str; vlm_reasoning: str; suggested_fix: str = ""
+    """Blind-read comparison between the crop and OCR text."""
+
+    ocr_text: str
+    vlm_reading: str
+    match: bool
+    confidence: str
+    vlm_reasoning: str
+    suggested_fix: str = ""
 
 
 @dataclass
 class ValidationReport:
-    token: SpatialToken; flags: list[ValidationFlag] = field(default_factory=list)
-    vlm_verdict: Optional[VLMVerdict] = None; final_text: str = ""
+    """Combined deterministic and VLM validation result for one token."""
 
-    def __str__(self) -> str:
-        lines = [f"── Token: '{self.token.text[:50]}' "
-                 f"(conf={self.token.confidence:.2f}, zone={self.token.zone}) ──"]
-        for flag in self.flags:
-            lines.append(str(flag))
-        if self.vlm_verdict:
-            v = self.vlm_verdict
-            tick = "✅" if v.match else "❌"
-            lines += [f"  🔭 VLM {tick}",
-                      f"     OCR: '{v.ocr_text[:40]}' → VLM: '{v.vlm_reading[:40]}'"
-                      f" | conf: {v.confidence}"]
-            if v.suggested_fix:
-                lines.append(f"     Fix: '{v.suggested_fix}'")
-        lines.append(f"  → Final: '{self.final_text}'")
-        return "\n".join(lines)
+    token: SpatialToken
+    flags: list[ValidationFlag] = field(default_factory=list)
+    vlm_verdict: Optional[VLMVerdict] = None
+    final_text: str = ""
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Deterministic rules
-# ─────────────────────────────────────────────────────────────────────────────
 
 class ConfidenceGate:
-    """
-    FIX v3: raised thresholds.
-    On handwritten/degraded documents TrOCR can produce garbled text even
-    when YOLO is confident it detected *something*.  We WARN at < 0.92 and
-    RESCAN at < 0.78 so the VLM actually gets invoked.
-    """
+    """Escalate low-confidence OCR tokens for review or rescanning."""
+
     def __init__(self, low: float = 0.92, critical: float = 0.78):
-        self.low      = low
+        self.low = low
         self.critical = critical
 
     def check(self, token: SpatialToken) -> Optional[ValidationFlag]:
         if token.confidence < self.critical:
             return ValidationFlag(
-                "ConfidenceGate", token,
+                "ConfidenceGate",
+                token,
                 f"conf {token.confidence:.2f} < {self.critical} (RESCAN)",
-                "RESCAN", "HIGH")
+                "RESCAN",
+                "HIGH",
+            )
         if token.confidence < self.low:
             return ValidationFlag(
-                "ConfidenceGate", token,
+                "ConfidenceGate",
+                token,
                 f"conf {token.confidence:.2f} < {self.low} (WARN)",
-                "WARN", "MEDIUM")
+                "WARN",
+                "MEDIUM",
+            )
         return None
 
 
 class GarbageTextRule:
-    """
-    FIX v3 — NEW RULE.
-    Detects obviously garbled OCR output using three heuristics:
+    """Detect clearly corrupted Latin OCR while ignoring Arabic-only tokens."""
 
-    H1. Consonant cluster: 5+ consecutive consonants → likely misread.
-    H2. Mixed alpha-digit-special chaos: if the text has high ratio of
-        punctuation / digits mixed into what looks like a word.
-    H3. Hyphenated non-dictionary compound: 'word-word' where both parts
-        are short and unrecognisable (e.g. 'kunahoe-human-system').
-
-    Any hit → RESCAN (sends to VLM).
-    """
-    VOWELS       = set("aeiouAEIOU")
-    CONSONANT_RE = re.compile(r"[bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ]{5,}")
-    CHAOS_RE     = re.compile(r"[^\w\s]{2,}")   # 2+ consecutive non-word chars
-
-    # Very short words (≤3 chars) that appear real
-    COMMON_SHORT = {"the", "a", "an", "to", "for", "of", "in", "on",
-                    "is", "he", "she", "it", "mr", "dr", "no", "ip",
-                    "id", "do", "my", "by", "we", "or", "at"}
+    VOWELS = set("aeiou")
+    CONSONANT_RE = re.compile(r"[bcdfghjklmnpqrstvwxyz]{5,}", re.IGNORECASE)
+    COMMON_SHORT = {
+        "the",
+        "a",
+        "an",
+        "to",
+        "for",
+        "of",
+        "in",
+        "on",
+        "is",
+        "mr",
+        "dr",
+        "no",
+        "id",
+        "by",
+        "we",
+        "or",
+        "at",
+    }
 
     def check(self, token: SpatialToken) -> Optional[ValidationFlag]:
         text = token.text.strip()
         if len(text) < 4:
-            return None   # too short to judge
-
-        words = re.findall(r"[a-zA-Z]+", text)
-        if not words:
             return None
 
-        for word in words:
-            if len(word) <= 3 and word.lower() in self.COMMON_SHORT:
+        latin_words = _latin_words(text)
+        if not latin_words:
+            return None
+
+        for word in latin_words:
+            lowered = word.lower()
+            if len(lowered) <= 3 and lowered in self.COMMON_SHORT:
                 continue
-
-            # H1: impossible consonant cluster
-            if self.CONSONANT_RE.search(word):
+            if self.CONSONANT_RE.search(lowered):
                 return ValidationFlag(
-                    "GarbageTextRule", token,
-                    f"Consonant cluster in '{word}' — likely OCR garble",
-                    "RESCAN", "HIGH")
-
-            # H2: very low vowel ratio for a long word
-            if len(word) >= 6:
-                vowel_ratio = sum(1 for c in word if c in self.VOWELS) / len(word)
+                    "GarbageTextRule",
+                    token,
+                    f"Consonant cluster in '{word}' indicates OCR corruption",
+                    "RESCAN",
+                    "HIGH",
+                )
+            if len(lowered) >= 6:
+                vowel_ratio = sum(1 for char in lowered if char in self.VOWELS) / len(lowered)
                 if vowel_ratio < 0.15:
                     return ValidationFlag(
-                        "GarbageTextRule", token,
-                        f"'{word}' has {vowel_ratio:.0%} vowels — garbled?",
-                        "RESCAN", "HIGH")
+                        "GarbageTextRule",
+                        token,
+                        f"'{word}' has an implausibly low vowel ratio",
+                        "RESCAN",
+                        "HIGH",
+                    )
 
-        # H3: suspicious hyphenated compound
-        parts = text.split("-")
-        if len(parts) >= 3 and all(len(p) >= 3 for p in parts):
+        parts = [part for part in text.split("-") if part]
+        if len(parts) >= 3 and all(not _contains_arabic(part) for part in parts):
             return ValidationFlag(
-                "GarbageTextRule", token,
-                f"Suspicious multi-hyphenated string: '{text[:40]}'",
-                "RESCAN", "MEDIUM")
+                "GarbageTextRule",
+                token,
+                f"Suspicious multi-hyphen token: '{text[:40]}'",
+                "RESCAN",
+                "MEDIUM",
+            )
 
         return None
 
 
 class DosageRangeRule:
+    """Flag implausible medication doses."""
+
     _DOSE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*mg", re.IGNORECASE)
 
-    def check(self, token: SpatialToken,
-              drug_hint: str = "default") -> Optional[ValidationFlag]:
+    def check(self, token: SpatialToken, drug_hint: str = "default") -> Optional[ValidationFlag]:
         matches = self._DOSE_RE.findall(token.text)
         if not matches:
             return None
         dose = float(matches[0])
-        lo, hi = DOSAGE_RANGES.get(drug_hint.lower(), DOSAGE_RANGES["default"])
-        if dose < lo or dose > hi:
-            action = "RESCAN" if dose > hi * 2 else "WARN"
-            return ValidationFlag(
-                "DosageRangeRule", token,
-                f"Dose {dose}mg outside [{lo}-{hi}mg]",
-                action, "HIGH" if action == "RESCAN" else "MEDIUM")
-        return None
+        low, high = DOSAGE_RANGES.get(drug_hint.lower(), DOSAGE_RANGES["default"])
+        if low <= dose <= high:
+            return None
+        action = "RESCAN" if dose > high * 2 else "WARN"
+        return ValidationFlag(
+            "DosageRangeRule",
+            token,
+            f"Dose {dose}mg outside [{low}-{high}mg]",
+            action,
+            "HIGH" if action == "RESCAN" else "MEDIUM",
+        )
 
 
 class FrequencyPlausibilityRule:
-    _NUM_RE = re.compile(r"\b(\d+)\b")
+    """Warn when dosing intervals are unusually frequent."""
+
+    _PATTERN = re.compile(r"(?:every\s*)?(\d+)\s*(h|hr|hrs|hour|hours|\u0633\u0627\u0639(?:\u0629)?)", re.IGNORECASE)
 
     def check(self, token: SpatialToken) -> Optional[ValidationFlag]:
-        for num_str in self._NUM_RE.findall(token.text.lower()):
-            num = int(num_str)
-            if 2 <= num <= 4 and (24 // num) > 6:
-                return ValidationFlag(
-                    "FrequencyRule", token,
-                    f"Every {num}h is unusually high",
-                    "WARN", "MEDIUM")
+        match = self._PATTERN.search(token.text)
+        if not match:
+            return None
+        interval = int(match.group(1))
+        if interval <= 4:
+            return ValidationFlag(
+                "FrequencyRule",
+                token,
+                f"Interval of every {interval}h is unusually frequent",
+                "WARN",
+                "MEDIUM",
+            )
         return None
 
 
 class DrugNameSanityRule:
-    def check(self, token: SpatialToken,
-              drug_dict: dict) -> Optional[ValidationFlag]:
+    """Catch numeric-only or out-of-vocabulary drug names."""
+
+    def check(self, token: SpatialToken, drug_dict: dict) -> Optional[ValidationFlag]:
         text = token.text.strip()
-        if re.fullmatch(r"[\d\s٠-٩]+", text):
+        if re.fullmatch(r"[\d\s\u0660-\u0669]+", text):
             return ValidationFlag(
-                "DrugNameRule", token,
-                "Drug name is purely numeric", "RESCAN", "HIGH")
-        if text.lower() not in drug_dict and len(text) > 1:
+                "DrugNameRule",
+                token,
+                "Drug name is purely numeric",
+                "RESCAN",
+                "HIGH",
+            )
+        if len(text) > 1 and text.lower() not in drug_dict:
             return ValidationFlag(
-                "DrugNameRule", token,
-                f"'{text}' not in drug dict", "WARN", "LOW")
+                "DrugNameRule",
+                token,
+                f"'{text}' not in drug dictionary",
+                "WARN",
+                "LOW",
+            )
         return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Groq VLM validator
-# ─────────────────────────────────────────────────────────────────────────────
-
 class VLMValidator:
-    MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+    """Blindly read a crop with the VLM and compare it to OCR output."""
 
-    SYSTEM_PROMPT = (
-        "You are a clinical OCR auditor specialising in handwritten medical "
-        "documents. You will receive an image crop and the text an OCR engine "
-        "produced from it.\n"
-        "Read the image carefully. Respond with ONLY valid JSON — no markdown, "
-        "no explanation outside the JSON:\n"
-        '{"vlm_reading": "<what you see>", "match": true/false, '
-        '"confidence": "high|medium|low", '
-        '"reasoning": "<brief>", "suggested_fix": "<corrected text or empty>"}\n'
-        "Set match=true only when the OCR text is an exact or near-exact match."
+    MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+    BLIND_READ_PROMPT = (
+        "You are reading a cropped medical document image. Read only the text visible in the crop. "
+        "Do not infer missing text. Return valid JSON only with keys: "
+        '{"reading": "<text>", "confidence": "high|medium|low", "reasoning": "<brief note>"}.'
     )
 
-    def __init__(self, api_key: str):
-        self.client    = Groq(api_key=api_key)
+    def __init__(self, api_key: str, mismatch_threshold: float = 0.22):
+        if Groq is None:
+            raise ImportError("groq is required to use VLMValidator")
+        self.client = Groq(api_key=api_key)
+        self.mismatch_threshold = mismatch_threshold
         self._executor = ThreadPoolExecutor(max_workers=6)
 
     def _crop_to_base64(self, token: SpatialToken) -> str:
-        img  = Image.open(token.source_path).convert("RGB")
-        x0   = max(token.x_min - 10, 0)
-        y0   = max(token.y_min - 10, 0)
-        x1   = min(token.x_max + 10, img.width)
-        y1   = min(token.y_max + 10, img.height)
-        crop = img.crop((x0, y0, x1, y1)).filter(ImageFilter.SHARPEN)
-        buf  = BytesIO()
-        crop.save(buf, format="JPEG", quality=95)
-        return base64.b64encode(buf.getvalue()).decode("utf-8")
+        """Encode the token crop as inline JPEG for the VLM call."""
+        image = Image.open(token.source_path).convert("RGB")
+        x0 = max(token.x_min - 10, 0)
+        y0 = max(token.y_min - 10, 0)
+        x1 = min(token.x_max + 10, image.width)
+        y1 = min(token.y_max + 10, image.height)
+        crop = image.crop((x0, y0, x1, y1)).filter(ImageFilter.SHARPEN)
+        buffer = BytesIO()
+        crop.save(buffer, format="JPEG", quality=95)
+        return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+    def _blind_read_crop(self, b64: str) -> dict:
+        """Ask the VLM to read the crop without showing OCR text."""
+        response = self.client.chat.completions.create(
+            model=self.MODEL,
+            messages=[
+                {"role": "system", "content": self.BLIND_READ_PROMPT},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                        }
+                    ],
+                },
+            ],
+            temperature=0.0,
+            max_completion_tokens=192,
+            stream=False,
+        )
+        raw = response.choices[0].message.content.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+        return json.loads(raw)
 
     def _call_groq(self, b64: str, ocr_text: str) -> VLMVerdict:
+        """Run blind reading first, then compare the result to OCR text."""
         try:
-            resp = self.client.chat.completions.create(
-                model=self.MODEL,
-                messages=[
-                    {"role": "system", "content": self.SYSTEM_PROMPT},
-                    {"role": "user", "content": [
-                        {"type": "image_url",
-                         "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                        {"type": "text",
-                         "text": f'OCR produced: "{ocr_text}"\nRespond with JSON only.'},
-                    ]},
-                ],
-                temperature=0.05,
-                max_completion_tokens=256,
-                stream=False,
-            )
-            raw  = resp.choices[0].message.content.strip()
-            raw  = re.sub(r"^```(?:json)?\s*", "", raw)
-            raw  = re.sub(r"\s*```$", "", raw)
-            data = json.loads(raw)
+            blind_read = self._blind_read_crop(b64)
+            vlm_reading = str(blind_read.get("reading", "")).strip()
+            confidence = str(blind_read.get("confidence", "low")).lower()
+            reasoning = str(blind_read.get("reasoning", "blind read complete")).strip()
+            distance = _normalized_edit_distance(vlm_reading, ocr_text)
+            match = distance <= self.mismatch_threshold
             return VLMVerdict(
                 ocr_text=ocr_text,
-                vlm_reading=data.get("vlm_reading", ocr_text),
-                match=bool(data.get("match", True)),
-                confidence=data.get("confidence", "medium"),
-                vlm_reasoning=data.get("reasoning", ""),
-                suggested_fix=data.get("suggested_fix", ""),
+                vlm_reading=vlm_reading,
+                match=match,
+                confidence=confidence,
+                vlm_reasoning=f"{reasoning}; normalized_edit_distance={distance:.3f}",
+                suggested_fix=vlm_reading if not match and vlm_reading else "",
             )
-        except json.JSONDecodeError as e:
-            print(f"  [VLM] JSON error: {e}")
-            return VLMVerdict(ocr_text, ocr_text, True, "low", f"parse-err: {e}")
-        except Exception as e:
-            print(f"  [VLM] Groq error: {e}")
-            return VLMVerdict(ocr_text, ocr_text, True, "low", str(e))
+        except Exception as exc:
+            return VLMVerdict(
+                ocr_text=ocr_text,
+                vlm_reading="",
+                match=True,
+                confidence="low",
+                vlm_reasoning=str(exc),
+                suggested_fix="",
+            )
 
     async def verify_async(self, token: SpatialToken) -> VLMVerdict:
-        print(f"  [VLM ▶] '{token.text[:40]}'")
-        b64  = self._crop_to_base64(token)
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            self._executor, self._call_groq, b64, token.text
-        )
+        b64 = self._crop_to_base64(token)
+        return await loop.run_in_executor(self._executor, self._call_groq, b64, token.text)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Crop re-scan agent
-# ─────────────────────────────────────────────────────────────────────────────
 
 class CropReScanAgent:
+    """Retry OCR on suspicious crops, preferring high-confidence VLM fixes."""
+
     RESCAN_SIZE = 512
 
     def __init__(self, processor, model, device):
         self.processor = processor
-        self.model     = model
-        self.device    = device
+        self.model = model
+        self.device = device
 
-    def rescan(self, token: SpatialToken,
-               vlm_verdict: Optional[VLMVerdict] = None) -> str:
-        # Priority 1: VLM high-confidence fix
-        if (vlm_verdict and not vlm_verdict.match
-                and vlm_verdict.confidence == "high"
-                and vlm_verdict.suggested_fix):
-            print(f"  [ReScan] VLM fix: '{token.text}' → '{vlm_verdict.suggested_fix}'")
+    def rescan(self, token: SpatialToken, vlm_verdict: Optional[VLMVerdict] = None) -> str:
+        if (
+            vlm_verdict
+            and not vlm_verdict.match
+            and vlm_verdict.confidence == "high"
+            and vlm_verdict.suggested_fix
+        ):
             return vlm_verdict.suggested_fix
 
-        # Priority 2: TrOCR re-run on sharpened crop
+        if torch is None:
+            return token.text
+
         try:
-            img  = Image.open(token.source_path).convert("RGB")
-            x0   = max(token.x_min - 5, 0)
-            y0   = max(token.y_min - 5, 0)
-            x1   = min(token.x_max + 5, img.width)
-            y1   = min(token.y_max + 5, img.height)
-            crop = img.crop((x0, y0, x1, y1))
+            image = Image.open(token.source_path).convert("RGB")
+            x0 = max(token.x_min - 5, 0)
+            y0 = max(token.y_min - 5, 0)
+            x1 = min(token.x_max + 5, image.width)
+            y1 = min(token.y_max + 5, image.height)
+            crop = image.crop((x0, y0, x1, y1))
             crop = crop.filter(ImageFilter.SHARPEN).filter(ImageFilter.SHARPEN)
-            crop = ImageOps.pad(crop, (self.RESCAN_SIZE, self.RESCAN_SIZE),
-                                color=(255, 255, 255))
-            pv   = self.processor(crop, return_tensors="pt").pixel_values.to(self.device)
+            crop = ImageOps.pad(crop, (self.RESCAN_SIZE, self.RESCAN_SIZE), color=(255, 255, 255))
+            pixel_values = self.processor(crop, return_tensors="pt").pixel_values.to(self.device)
             with torch.no_grad():
-                ids = self.model.generate(pv, max_new_tokens=128)
-            corrected = self.processor.batch_decode(
-                ids, skip_special_tokens=True)[0].strip()
-            print(f"  [ReScan] TrOCR: '{token.text}' → '{corrected}'")
-            return corrected
-        except Exception as e:
-            print(f"  [ReScan] ERROR: {e}")
+                ids = self.model.generate(pixel_values, max_new_tokens=128)
+            return self.processor.batch_decode(ids, skip_special_tokens=True)[0].strip()
+        except Exception:
             return token.text
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Main validator agent
-# ─────────────────────────────────────────────────────────────────────────────
-
 class ValidatorAgent:
+    """Apply deterministic rules and optional VLM verification across tokens."""
+
     def __init__(
         self,
         processor,
         trocr_model,
         device,
-        drug_dict:       dict,
-        groq_api_key:    str,
-        vlm_on_warn:     bool = True,
-        always_vlm_body: bool = False,   # send ALL body tokens to VLM
+        drug_dict: dict,
+        groq_api_key: str | None,
+        vlm_on_warn: bool = True,
+        always_vlm_body: bool = False,
     ):
-        self.drug_dict       = drug_dict
-        self.vlm_on_warn     = vlm_on_warn
+        self.drug_dict = drug_dict
+        self.vlm_on_warn = vlm_on_warn
         self.always_vlm_body = always_vlm_body
 
-        self.confidence_gate = ConfidenceGate()       # thresholds raised in v3
-        self.garbage_rule    = GarbageTextRule()       # NEW in v3
-        self.dosage_rule     = DosageRangeRule()
-        self.frequency_rule  = FrequencyPlausibilityRule()
-        self.drug_rule       = DrugNameSanityRule()
+        self.confidence_gate = ConfidenceGate()
+        self.garbage_rule = GarbageTextRule()
+        self.dosage_rule = DosageRangeRule()
+        self.frequency_rule = FrequencyPlausibilityRule()
+        self.drug_rule = DrugNameSanityRule()
 
-        self.vlm          = VLMValidator(api_key=groq_api_key)
+        self.vlm = VLMValidator(api_key=groq_api_key) if groq_api_key else None
         self.rescan_agent = CropReScanAgent(processor, trocr_model, device)
 
     async def validate_token_async(
         self,
-        token:     SpatialToken,
-        drug_hint: str  = "default",
-        is_drug:   bool = False,
+        token: SpatialToken,
+        drug_hint: str = "default",
+        is_drug: bool = False,
     ) -> ValidationReport:
-
+        """Validate a single OCR token and optionally rescan it."""
         report = ValidationReport(token=token, final_text=token.text)
-        flags  = []
+        flags: list[ValidationFlag] = []
 
-        if f := self.confidence_gate.check(token):        flags.append(f)
-        if f := self.garbage_rule.check(token):           flags.append(f)
-        if f := self.dosage_rule.check(token, drug_hint): flags.append(f)
-        if f := self.frequency_rule.check(token):         flags.append(f)
-        if is_drug:
-            if f := self.drug_rule.check(token, self.drug_dict):
-                flags.append(f)
+        for flag in (
+            self.confidence_gate.check(token),
+            self.garbage_rule.check(token),
+            self.dosage_rule.check(token, drug_hint),
+            self.frequency_rule.check(token),
+            self.drug_rule.check(token, self.drug_dict) if is_drug else None,
+        ):
+            if flag is not None:
+                flags.append(flag)
 
         report.flags = flags
-        has_rescan   = any(f.action == "RESCAN" for f in flags)
-        has_warn     = any(f.action == "WARN"   for f in flags)
+        has_rescan = any(flag.action == "RESCAN" for flag in flags)
+        has_warn = any(flag.action == "WARN" for flag in flags)
 
-        send_to_vlm = (
+        send_to_vlm = self.vlm is not None and (
             has_rescan
             or (self.vlm_on_warn and has_warn)
             or (self.always_vlm_body and token.zone == "body")
         )
 
-        if send_to_vlm:
-            verdict            = await self.vlm.verify_async(token)
+        if send_to_vlm and self.vlm is not None:
+            verdict = await self.vlm.verify_async(token)
             report.vlm_verdict = verdict
-            report.final_text  = (
-                self.rescan_agent.rescan(token, verdict)
-                if not verdict.match
-                else token.text
-            )
-        else:
-            report.final_text = token.text
+            report.final_text = self.rescan_agent.rescan(token, verdict) if not verdict.match else token.text
 
         return report
 
     async def validate_all_async(
         self,
-        tokens:     list[SpatialToken],
+        tokens: list[SpatialToken],
         drug_pairs: list[tuple[str, str]],
     ) -> list[ValidationReport]:
-
-        sep = "═" * 60
-        print(f"\n{sep}\n  VALIDATOR AGENT v3 — Groq Llama-4-Scout\n{sep}")
-
-        drug_names = {d.lower() for d, _ in drug_pairs}
+        """Validate a page worth of OCR tokens concurrently."""
+        drug_names = {drug.lower() for drug, _ in drug_pairs}
         tasks = []
         for token in tokens:
-            words   = token.text.lower().split()
-            is_drug = any(w in drug_names for w in words)
-            hint    = next((w for w in words if w in DOSAGE_RANGES), "default")
-            tasks.append(
-                self.validate_token_async(token, drug_hint=hint, is_drug=is_drug)
-            )
-
-        reports = await asyncio.gather(*tasks)
-
-        for r in reports:
-            print(r, "\n")
-
-        vlm_n = sum(1 for r in reports if r.vlm_verdict)
-        fix_n = sum(1 for r in reports if r.vlm_verdict and not r.vlm_verdict.match)
-        print(f"\n  Tokens: {len(reports)} | VLM calls: {vlm_n} | Fixes: {fix_n}")
-        return reports
+            words = WORD_RE.findall(token.text.lower())
+            is_drug = any(word in drug_names for word in words)
+            hint = next((word for word in words if word in DOSAGE_RANGES), "default")
+            tasks.append(self.validate_token_async(token, drug_hint=hint, is_drug=is_drug))
+        return list(await asyncio.gather(*tasks))
